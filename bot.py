@@ -7,7 +7,7 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 # ==========================================
 # НАСТРОЙКИ БОТА
 # ==========================================
-BOT_TOKEN = '8974171870:AAGKKrUWILX8ugvsHMVTnbrhY-d4TgF5Ru8'
+BOT_TOKEN = '8974171870:AAEeaqURFUgT9-XKDpe44D0A3pzeq5Q2OBo'
 ADMIN_ID = 314148464
 
 bot = telebot.TeleBot(BOT_TOKEN)
