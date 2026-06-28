@@ -7,7 +7,7 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 # ==========================================
 # НАСТРОЙКИ БОТА
 # ==========================================
-BOT_TOKEN = '8974171870:AAEeaqURFUgT9-XKDpe44D0A3pzeq5Q2OBo'
+BOT_TOKEN = '8974171870:AAGKKrUWILX8ugvsHMVTnbrhY-d4TgF5Ru8'
 ADMIN_ID = 314148464
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -20,6 +20,7 @@ def init_db():
     conn = sqlite3.connect('shop_data.db')
     cur = conn.cursor()
     
+    # Таблица пользователей
     cur.execute('''
     CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY,
@@ -30,6 +31,7 @@ def init_db():
         purchases INTEGER DEFAULT 0
     )''')
     
+    # Категории
     cur.execute('''
     CREATE TABLE IF NOT EXISTS categories (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,6 +41,7 @@ def init_db():
         is_hidden INTEGER DEFAULT 0
     )''')
     
+    # Подкатегории
     cur.execute('''
     CREATE TABLE IF NOT EXISTS subcategories (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,6 +50,7 @@ def init_db():
         FOREIGN KEY (category_id) REFERENCES categories (id) ON DELETE CASCADE
     )''')
     
+    # Товары
     cur.execute('''
     CREATE TABLE IF NOT EXISTS products (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,6 +63,7 @@ def init_db():
         file_id TEXT DEFAULT '' 
     )''')
     
+    # Заказы
     cur.execute('''
     CREATE TABLE IF NOT EXISTS orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,7 +76,9 @@ def init_db():
     conn.commit()
     conn.close()
 
-# ================= ФУНКЦИИ БАЗЫ =================
+# ==========================================
+# ФУНКЦИИ БАЗЫ
+# ==========================================
 def db_add_user(user_id, first_name, username):
     conn = sqlite3.connect('shop_data.db')
     cur = conn.cursor()
@@ -177,8 +184,28 @@ def db_add_purchase(user_id, product_name, price):
     conn.close()
 
 # ==========================================
-# КЛАВИАТУРЫ
+# НОВАЯ КЛАВИАТУРА (ТОЧНО КАК НА СКРИНШОТЕ)
 # ==========================================
+def welcome_keyboard():
+    kb = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    
+    # Первая строка на всю ширину
+    btn_shop = KeyboardButton("▶️ Перейти в магазин")
+    
+    # Вторая строка - две кнопки
+    btn_profile = KeyboardButton("👤 Личный кабинет")
+    btn_ref = KeyboardButton("💰 Реферальная система")
+    
+    # Третья строка - на всю ширину
+    btn_support = KeyboardButton("👮 Поддержка")
+    
+    kb.add(btn_shop)
+    kb.row(btn_profile, btn_ref)
+    kb.add(btn_support)
+    
+    return kb
+
+# Клавиатура для магазина (когда зашли внутрь)
 def main_user_kb():
     kb = ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(KeyboardButton("🛒 Покупки"), KeyboardButton("👤 Профиль"))
@@ -189,6 +216,9 @@ def admin_main_kb():
     kb.add(KeyboardButton("📦 Управление товарами"), KeyboardButton("📊 Статистика"))
     return kb
 
+# ==========================================
+# ИНЛАЙН КЛАВИАТУРЫ (Кнопки под сообщениями)
+# ==========================================
 def categories_shop_kb():
     kb = InlineKeyboardMarkup()
     for cat in db_get_categories(include_hidden=False):
@@ -251,22 +281,60 @@ def admin_cat_edit_kb(cat_id):
     return kb
 
 # ==========================================
-# ПОКУПАТЕЛЬ
+# ОБРАБОТЧИКИ
 # ==========================================
+
+# --- СТАРТ (Текст и Клавиатура точь-в-точь как на фото) ---
 @bot.message_handler(commands=['start'])
 def start(message):
     db_add_user(message.chat.id, message.chat.first_name, message.chat.username)
-    bot.send_message(message.chat.id, "🔥 Добро пожаловать в магазин!\n\n💎 Лучшие конфиги\n⚡ Мгновенная выдача", reply_markup=main_user_kb())
+    
+    text = (
+        "Наша команда рада приветствовать вас в нашем боте!\n\n"
+        "Здесь вы можете приобрести подписку для нашего приложения NetWing и открыть для себя все его уникальные возможности\n\n"
+        "Заходя в этого бота, вы автоматически соглашаетесь с нашими\n"
+        "Политикой конфиденциальности & Пользовательским соглашением."
+    )
+    
+    # Отправляем сообщение с кнопками точно как на скрине
+    bot.send_message(
+        message.chat.id, 
+        text, 
+        disable_web_page_preview=True, # Чтобы ссылки не превращались в превьюшки
+        reply_markup=welcome_keyboard()
+    )
 
-@bot.message_handler(func=lambda message: message.text == "🛒 Покупки")
-def shop(message):
+# --- ОБРАБОТКА КНОПОК ИЗ МЕНЮ ---
+
+# 1. Перейти в магазин
+@bot.message_handler(func=lambda message: message.text == "▶️ Перейти в магазин")
+def go_to_shop(message):
+    cats = db_get_categories(include_hidden=False)
+    if not cats:
+        bot.send_message(message.chat.id, "❗ Магазин пуст. Сначала добавьте категории в админ-панели.", reply_markup=welcome_keyboard())
+        return
     bot.send_message(message.chat.id, "🗂 Выберите раздел:", reply_markup=categories_shop_kb())
 
-@bot.message_handler(func=lambda message: message.text == "👤 Профиль")
-def profile(message):
-    bot.send_message(message.chat.id, "🔧 Профиль в разработке.")
+# 2. Личный кабинет
+@bot.message_handler(func=lambda message: message.text == "👤 Личный кабинет")
+def user_profile(message):
+    user = db_get_user_profile(message.chat.id) # Надо добавить функцию. Пока заглушка
+    bot.send_message(message.chat.id, "👤 Здесь будет отображаться ваш профиль, баланс и история покупок.\n\n(Раздел в разработке).", reply_markup=welcome_keyboard())
 
-# --- Навигация ---
+# 3. Реферальная система
+@bot.message_handler(func=lambda message: message.text == "💰 Реферальная система")
+def referral_system(message):
+    bot.send_message(message.chat.id, "💰 Здесь будет ваша реферальная ссылка и статистика приглашений.\n\n(Раздел в разработке).", reply_markup=welcome_keyboard())
+
+# 4. Поддержка
+@bot.message_handler(func=lambda message: message.text == "👮 Поддержка")
+def support_chat(message):
+    bot.send_message(message.chat.id, "👮 Для связи с поддержкой напишите @support_admin_username (Заглушка, укажите свой контакт).", reply_markup=welcome_keyboard())
+
+# ==========================================
+# ПОКУПАТЕЛЬ (Магазин - Каталог)
+# ==========================================
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith("shop_cat_") and not call.data.startswith("shop_cat_prods_"))
 def nav_cat(call):
     cat_id = int(call.data.split("_")[2])
@@ -274,36 +342,72 @@ def nav_cat(call):
     has_direct_products = len(db_get_products(cat_id=cat_id)) > 0
     
     if cat[3]:
-        bot.send_photo(call.message.chat.id, cat[3], caption=f"📁 **{cat[1]}**\n\n{cat[2]}", reply_markup=subcategories_shop_kb(cat_id, show_products=has_direct_products))
-        bot.delete_message(call.message.chat.id, call.message.message_id)
+        bot.edit_message_media(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            media=telebot.types.InputMediaPhoto(cat[3], caption=f"📁 **{cat[1]}**\n\n{cat[2]}"),
+            reply_markup=subcategories_shop_kb(cat_id, show_products=has_direct_products)
+        )
     else:
-        bot.edit_message_text(f"📁 **{cat[1]}**\n\n{cat[2]}", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=subcategories_shop_kb(cat_id, show_products=has_direct_products))
+        bot.edit_message_text(
+            f"📁 **{cat[1]}**\n\n{cat[2]}",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            parse_mode="Markdown",
+            reply_markup=subcategories_shop_kb(cat_id, show_products=has_direct_products)
+        )
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("shop_cat_prods_"))
 def nav_cat_products(call):
     cat_id = int(call.data.split("_")[3])
-    bot.edit_message_text("📦 Товары категории:", chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=products_shop_kb(cat_id=cat_id))
+    bot.edit_message_text(
+        "📦 Товары категории:",
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        reply_markup=products_shop_kb(cat_id=cat_id)
+    )
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("shop_sub_"))
 def nav_sub(call):
     sub_id = int(call.data.split("_")[2])
-    bot.edit_message_text("📦 Выберите товар:", chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=products_shop_kb(subcat_id=sub_id))
+    bot.edit_message_text(
+        "📦 Выберите товар:",
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        reply_markup=products_shop_kb(subcat_id=sub_id)
+    )
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("shop_prod_"))
 def nav_prod(call):
     prod_id = int(call.data.split("_")[2])
     prod = db_get_product(prod_id)
     text = f"📦 **{prod[2]}**\n\n📝 {prod[4]}\n\n💰 Цена: {prod[3]}₽"
+    
     if prod[5]:
-        bot.send_photo(call.message.chat.id, prod[5], caption=text, parse_mode="Markdown", reply_markup=product_buy_kb(prod_id))
-        bot.delete_message(call.message.chat.id, call.message.message_id)
+        bot.edit_message_media(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            media=telebot.types.InputMediaPhoto(prod[5], caption=text, parse_mode="Markdown"),
+            reply_markup=product_buy_kb(prod_id)
+        )
     else:
-        bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=product_buy_kb(prod_id))
+        bot.edit_message_text(
+            text,
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            parse_mode="Markdown",
+            reply_markup=product_buy_kb(prod_id)
+        )
 
-# --- Назад ---
+# --- Кнопки Назад ---
 @bot.callback_query_handler(func=lambda call: call.data == "shop_back")
 def back_main(call):
-    bot.edit_message_text("🗂 Выберите раздел:", chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=categories_shop_kb())
+    bot.edit_message_text(
+        "🗂 Выберите раздел:",
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        reply_markup=categories_shop_kb()
+    )
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("shop_back_sub_"))
 def back_sub(call):
@@ -313,34 +417,65 @@ def back_sub(call):
     cur.execute("SELECT category_id FROM subcategories WHERE id=?", (sub_id,))
     res = cur.fetchone()
     conn.close()
+    
     if res:
         cat_id = res[0]
         cat = db_get_category(cat_id)
         has_direct_products = len(db_get_products(cat_id=cat_id)) > 0
         if cat[3]:
-            bot.send_photo(call.message.chat.id, cat[3], caption=f"📁 **{cat[1]}**\n\n{cat[2]}", reply_markup=subcategories_shop_kb(cat_id, show_products=has_direct_products))
-            bot.delete_message(call.message.chat.id, call.message.message_id)
+            bot.edit_message_media(
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                media=telebot.types.InputMediaPhoto(cat[3], caption=f"📁 **{cat[1]}**\n\n{cat[2]}"),
+                reply_markup=subcategories_shop_kb(cat_id, show_products=has_direct_products)
+            )
         else:
-            bot.edit_message_text(f"📁 **{cat[1]}**\n\n{cat[2]}", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=subcategories_shop_kb(cat_id, show_products=has_direct_products))
+            bot.edit_message_text(
+                f"📁 **{cat[1]}**\n\n{cat[2]}",
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                parse_mode="Markdown",
+                reply_markup=subcategories_shop_kb(cat_id, show_products=has_direct_products)
+            )
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("shop_back_cat_"))
 def back_cat(call):
     cat_id = int(call.data.split("_")[3])
     cat = db_get_category(cat_id)
     if cat[3]:
-        bot.send_photo(call.message.chat.id, cat[3], caption=f"📁 **{cat[1]}**\n\n{cat[2]}", reply_markup=subcategories_shop_kb(cat_id, show_products=True))
-        bot.delete_message(call.message.chat.id, call.message.message_id)
+        bot.edit_message_media(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            media=telebot.types.InputMediaPhoto(cat[3], caption=f"📁 **{cat[1]}**\n\n{cat[2]}"),
+            reply_markup=subcategories_shop_kb(cat_id, show_products=True)
+        )
     else:
-        bot.edit_message_text(f"📁 **{cat[1]}**\n\n{cat[2]}", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="Markdown", reply_markup=subcategories_shop_kb(cat_id, show_products=True))
+        bot.edit_message_text(
+            f"📁 **{cat[1]}**\n\n{cat[2]}",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            parse_mode="Markdown",
+            reply_markup=subcategories_shop_kb(cat_id, show_products=True)
+        )
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("shop_back_prod_"))
 def back_prod(call):
     prod_id = int(call.data.split("_")[3])
     prod = db_get_product(prod_id)
     if prod[1] > 0:
-        bot.edit_message_text("📦 Выберите товар:", chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=products_shop_kb(subcat_id=prod[1]))
+        bot.edit_message_text(
+            "📦 Выберите товар:",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=products_shop_kb(subcat_id=prod[1])
+        )
     else:
-        bot.edit_message_text("📦 Товары категории:", chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=products_shop_kb(cat_id=prod[0]))
+        bot.edit_message_text(
+            "📦 Товары категории:",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=products_shop_kb(cat_id=prod[0])
+        )
 
 # --- Покупка ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith("buy_"))
@@ -358,7 +493,7 @@ def buy_process(call):
     bot.answer_callback_query(call.id)
 
 # ==========================================
-# АДМИН
+# АДМИН-ПАНЕЛЬ (Без изменений, работает через /admin)
 # ==========================================
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
@@ -542,7 +677,7 @@ def admin_stats(message):
 # ==========================================
 if __name__ == "__main__":
     init_db()
-    print("🤖 Бот Магазин (Оптимизированная версия) запущен...")
+    print("🤖 Бот с новым дизайном (NetWing) запущен...")
     while True:
         try:
             bot.polling(none_stop=True)
