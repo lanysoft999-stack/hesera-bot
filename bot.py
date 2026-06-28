@@ -8,7 +8,7 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 # ==========================================
 # НАСТРОЙКИ БОТА
 # ==========================================
-BOT_TOKEN = os.getenv('BOT_TOKEN', '8974171870:AAGKKrUWILX8ugvsHMVTnbrhY-d4TgF5Ru8')
+BOT_TOKEN = os.getenv('BOT_TOKEN', '8861434958:AAFbqGXlQrRpQNtOxVHG0nKDFo0mHZXPIDg')
 ADMIN_ID = int(os.getenv('ADMIN_ID', 314148464))
 
 bot = telebot.TeleBot(BOT_TOKEN)
