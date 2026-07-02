@@ -10,7 +10,7 @@ SUPPORT_LINK = "https://t.me/hesers"
 BOT_USERNAME = "ClumsyHeseraBot"
 SBP_CARD = "220220671487913"
 USD_RATE = 90
-API_PORT = 10000
+API_PORT = int(os.environ.get("PORT", 8080))
 DOWNLOAD_LINK = "https://t.me/+8xHk6E4oLslhMjBk"
 GROUP_ID = -1004359350990
 CRYPTO_PAY_TOKEN = "551375:AAzRfloY3sYQgypNYytUD4BqHRZ6dcjCSbH"
@@ -139,6 +139,7 @@ async def check_and_notify_expiring(context):
                         data.setdefault("notifications_sent", []).append(key); save_data(data)
                     except: pass
 
+# ===== КНОПКИ =====
 def main_menu(uid, data):
     u = get_user(data, uid)
     return InlineKeyboardMarkup([[InlineKeyboardButton("🛍 Каталог", callback_data='shop')], [InlineKeyboardButton(f"👤 Профиль · ₽{u.get('balance_rub',0)}", callback_data='profile')]])
@@ -373,8 +374,13 @@ async def handle_text(update, context):
             except: await update.message.reply_text("❌ Ошибка!")
         else: await update.message.reply_text("❌ Формат: `ID|Продукт|Дни`")
         return
-    if context.user_data.get('acn'): context.user_data.pop('acn'); cid = f"cat_{int(time.time())}"; data["categories"][cid] = {"id":cid,"name":txt,"desc":"","items":[]}; save_data(data); await update.message.reply_text(f"✅ «{txt}» создана!", reply_markup=admin_cats_kb(data)); return
-    if context.user_data.get('acd'): cid = context.user_data.pop('acd'); data["categories"][cid]["desc"] = txt; save_data(data); await update.message.reply_text("✅ Описание обновлено!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Назад", callback_data=f"admin_cat_{cid}")]])); return
+    if context.user_data.get('acn'):
+        context.user_data.pop('acn'); cid = f"cat_{int(time.time())}"
+        data["categories"][cid] = {"id":cid,"name":txt,"desc":"","items":[]}; save_data(data)
+        await update.message.reply_text(f"✅ «{txt}» создана!", reply_markup=admin_cats_kb(data)); return
+    if context.user_data.get('acd'):
+        cid = context.user_data.pop('acd'); data["categories"][cid]["desc"] = txt; save_data(data)
+        await update.message.reply_text("✅ Описание обновлено!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Назад", callback_data=f"admin_cat_{cid}")]])); return
     if context.user_data.get('ai'):
         cid = context.user_data.pop('ai'); parts = txt.split('|')
         if len(parts) >= 3:
@@ -398,20 +404,24 @@ async def handle_text(update, context):
             save_data(data); await update.message.reply_text("✅ Цена обновлена!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Назад", callback_data=f"admin_item_{cid}_{iid}")]]))
         except: await update.message.reply_text("❌ Число!")
         return
-    if context.user_data.get('br'): context.user_data.pop('br'); c = 0
-    for u in data["users"]:
-        try: await context.bot.send_message(int(u), f"📢 {txt}"); c+=1
-        except: pass
-    await update.message.reply_text(f"✅ {c} чел.", reply_markup=admin_menu())
-    elif context.user_data.get('rh'): context.user_data.pop('rh'); c = 0
-    for k,l in data["licenses"].items():
-        if l.get("user_id")==txt and l.get("activated"): l["hwid"]=None; l["activated"]=False; c+=1
-    save_data(data); await update.message.reply_text(f"✅ Сброшено: {c}", reply_markup=admin_menu())
-    elif context.user_data.get('rj'): rid = context.user_data.pop('rj'); rec = data["pending_receipts"].get(rid)
-    if rec: del data["pending_receipts"][rid]; save_data(data)
-    try: await context.bot.send_message(int(rec["user_id"]), f"❌ Отказано.\n📝 {txt}")
-    except: pass
-    await update.message.reply_text("❌ Отклонено.", reply_markup=admin_menu())
+    if context.user_data.get('br'):
+        context.user_data.pop('br'); c = 0
+        for u in data["users"]:
+            try: await context.bot.send_message(int(u), f"📢 {txt}"); c+=1
+            except: pass
+        await update.message.reply_text(f"✅ {c} чел.", reply_markup=admin_menu())
+    elif context.user_data.get('rh'):
+        context.user_data.pop('rh'); c = 0
+        for k,l in data["licenses"].items():
+            if l.get("user_id")==txt and l.get("activated"): l["hwid"]=None; l["activated"]=False; c+=1
+        save_data(data); await update.message.reply_text(f"✅ Сброшено: {c}", reply_markup=admin_menu())
+    elif context.user_data.get('rj'):
+        rid = context.user_data.pop('rj'); rec = data["pending_receipts"].get(rid)
+        if rec:
+            del data["pending_receipts"][rid]; save_data(data)
+            try: await context.bot.send_message(int(rec["user_id"]), f"❌ Отказано.\n📝 {txt}")
+            except: pass
+        await update.message.reply_text("❌ Отклонено.", reply_markup=admin_menu())
 
 async def handle_photo(update, context):
     uid = str(update.effective_user.id); data = load_data(); photo = update.message.photo[-1].file_id
@@ -433,7 +443,7 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.job_queue.run_repeating(check_and_ban_expired, interval=3600, first=10)
     app.job_queue.run_repeating(check_and_notify_expiring, interval=21600, first=30)
-    print("✅ Hesera Bot + API запущен!")
+    print("✅ Бот + API запущен!")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
