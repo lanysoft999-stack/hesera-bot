@@ -1,1 +1,2 @@
-pyTelegramBotAPI
+python-telegram-bot[job-queue]==21.3
+requests
