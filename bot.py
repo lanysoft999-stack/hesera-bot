@@ -37,11 +37,11 @@ def home():
 def ping():
     return "OK"
 
-# --- АВТОПИНГ (чтобы не засыпал) ---
+# --- АВТОПИНГ ---
 def auto_ping():
     time.sleep(30)
     while True:
-        time.sleep(240)  # каждые 4 минуты
+        time.sleep(240)
         try:
             requests.get("http://localhost:10000/ping", timeout=10)
             print("🔄 Пинг OK")
@@ -61,6 +61,7 @@ COMMISSION = 0.20
 bot = telebot.TeleBot(BOT_TOKEN)
 admin_product_draft = {}
 admin_mailing_draft = {}
+LANG_CACHE = {}
 
 # ================= КУРС =================
 def get_usdt_rub_rate():
@@ -102,7 +103,33 @@ def init_db():
 
 init_db()
 
-# ================= ФУНКЦИИ БД (кратко) =================
+# ================= ЯЗЫКИ =================
+def get_user_lang(user_id):
+    if user_id in LANG_CACHE:
+        return LANG_CACHE[user_id]
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT lang FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    lang = row[0] if row and row[0] else 'ru'
+    LANG_CACHE[user_id] = lang
+    return lang
+
+def set_user_lang(user_id, lang):
+    LANG_CACHE[user_id] = lang
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET lang = ? WHERE user_id = ?", (lang, user_id))
+    conn.commit()
+    conn.close()
+
+def tr(user_id, ru_text, en_text=""):
+    if not en_text:
+        en_text = ru_text
+    return en_text if get_user_lang(user_id) == 'en' else ru_text
+
+# ================= ФУНКЦИИ БД =================
 def get_setting(key):
     conn = sqlite3.connect("bot_database.db"); cursor = conn.cursor()
     cursor.execute("SELECT value FROM settings WHERE key = ?", (key,)); row = cursor.fetchone(); conn.close()
@@ -183,12 +210,14 @@ def decrease_stock(prod_id):
     cursor.execute("UPDATE products SET stock = stock - 1 WHERE id = ?", (prod_id,)); conn.commit(); conn.close()
 
 def add_user(user_id, username, referrer_id=None):
-    conn = sqlite3.connect("bot_database.db"); cursor = conn.cursor()
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
     if not cursor.fetchone():
         date_str = datetime.datetime.now().strftime("%d.%m.%Y")
         if referrer_id and str(referrer_id).isdigit() and int(referrer_id) == user_id: referrer_id = None
-        cursor.execute("INSERT INTO users (user_id, username, reg_date, balance, referrer_id) VALUES (?, ?, ?, 0.0, ?)", (user_id, username, date_str, referrer_id))
+        cursor.execute("INSERT INTO users (user_id, username, reg_date, balance, referrer_id, lang) VALUES (?, ?, ?, 0.0, ?, 'ru')",
+                      (user_id, username, date_str, referrer_id))
         conn.commit()
         if referrer_id:
             try: bot.send_message(referrer_id, f"🎉 Новый реферал!\n👤 @{username or user_id}\n📅 {date_str}", parse_mode="HTML")
@@ -241,13 +270,11 @@ def record_purchase(user_id, product_id, price, product_name, content=None, cont
 
 def get_stats():
     conn = sqlite3.connect("bot_database.db"); cursor = conn.cursor()
-    today = datetime.datetime.now().strftime("%Y-%m-%d"); week_ago = (datetime.datetime.now() - datetime.timedelta(days=7)).strftime("%Y-%m-%d"); month_ago = (datetime.datetime.now() - datetime.timedelta(days=30)).strftime("%Y-%m-%d")
-    cursor.execute("SELECT COUNT(*), SUM(price) FROM purchases_stats"); total_count, total_sum = cursor.fetchone()
-    cursor.execute("SELECT COUNT(*), SUM(price) FROM purchases_stats WHERE date LIKE ?", (today + '%',)); today_count, today_sum = cursor.fetchone()
-    cursor.execute("SELECT COUNT(*), SUM(price) FROM purchases_stats WHERE date >= ?", (week_ago,)); week_count, week_sum = cursor.fetchone()
-    cursor.execute("SELECT COUNT(*), SUM(price) FROM purchases_stats WHERE date >= ?", (month_ago,)); month_count, month_sum = cursor.fetchone()
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    cursor.execute("SELECT COUNT(*), SUM(price) FROM purchases_stats"); total = cursor.fetchone()
+    cursor.execute("SELECT COUNT(*), SUM(price) FROM purchases_stats WHERE date LIKE ?", (today + '%',)); today_data = cursor.fetchone()
     conn.close()
-    return {"total": total_count or 0, "today": today_count or 0}
+    return {"total": total[0] or 0, "today": today_data[0] or 0}
 
 def create_balance_request(user_id, amount, method):
     conn = sqlite3.connect("bot_database.db"); cursor = conn.cursor()
@@ -294,9 +321,9 @@ def check_crypto_invoice(invoice_id):
 # ================= КЛАВИАТУРЫ =================
 def main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row(types.KeyboardButton("🛍 Магазин"))
-    markup.row(types.KeyboardButton("👤 Профиль"), types.KeyboardButton("💰 Рефералы"))
-    markup.row(types.KeyboardButton("👨‍💻 Поддержка"))
+    markup.row(types.KeyboardButton("🛍 Магазин / Shop"))
+    markup.row(types.KeyboardButton("👤 Профиль / Profile"), types.KeyboardButton("💰 Рефералы / Referrals"))
+    markup.row(types.KeyboardButton("👨‍💻 Поддержка / Support"))
     return markup
 
 def admin_menu():
@@ -361,8 +388,26 @@ def handle_file(message):
 def cmd_start(message):
     args = message.text.split(); ref = args[1] if len(args) > 1 and args[1].isdigit() else None
     add_user(message.from_user.id, message.from_user.username, ref)
-    text = "👑 Добро пожаловать в магазин NetWing!\n\nЗдесь вы можете приобрести конфиги и приватный канал."
+    user_id = message.from_user.id
+    text = tr(user_id,
+        "👑 Добро пожаловать в магазин NetWing!\n\nЗдесь вы можете приобрести конфиги и приватный канал.\n\nКоманды:\n/language - сменить язык",
+        "👑 Welcome to NetWing shop!\n\nHere you can purchase configs and private channel.\n\nCommands:\n/language - change language")
     send_with_photo(message.chat.id, text, main_menu(), get_setting("menu_photo"))
+
+@bot.message_handler(commands=['language'])
+def cmd_language(message):
+    user_id = message.from_user.id
+    current = get_user_lang(user_id)
+    new_lang = 'en' if current == 'ru' else 'ru'
+    set_user_lang(user_id, new_lang)
+    
+    if new_lang == 'en':
+        text = "🇬🇧 Language changed to English!\n\nUse /start to see the menu."
+    else:
+        text = "🇷🇺 Язык изменён на Русский!\n\nИспользуйте /start чтобы увидеть меню."
+    
+    bot.send_message(message.chat.id, text)
+    cmd_start(message)
 
 @bot.message_handler(commands=['skip_photo'])
 def skip_photo(message):
@@ -381,23 +426,32 @@ def handle_text(message):
         else: add_product(d['parent_type'], d['parent_id'], d['name'], d['desc'], d['price'], d.get('photo_id'), 'text', content, d['stock']); bot.send_message(message.chat.id, f"✅ Товар создан!")
         del admin_product_draft[uid]; return
     
-    if txt == "🛍 Магазин":
+    if txt in ["🛍 Магазин / Shop"]:
         cats = get_categories(); markup = types.InlineKeyboardMarkup(row_width=1)
         for c_id, c_name, _ in cats: markup.add(types.InlineKeyboardButton(c_name, callback_data=f"cat_{c_id}"))
-        bot.send_message(message.chat.id, "🛍 Выберите раздел:", reply_markup=markup)
-    elif txt == "👤 Профиль":
+        bot.send_message(message.chat.id, tr(uid, "🛍 Выберите раздел:", "🛍 Choose category:"), reply_markup=markup)
+    
+    elif txt in ["👤 Профиль / Profile"]:
         user = get_user(uid); _, ref_rub, ref_usd, ref_gold = get_ref_stats(uid)
-        text = f"👤 Профиль\n\n💰 RUB: {user['balance']} ₽ (Ref: {ref_rub})\n💵 USD: {user['usd_balance']} $ (Ref: {ref_usd})\n🪙 GOLD: {user['gold_balance']} (Ref: {ref_gold})\n🛒 Покупок: {user['purchases_count']}"
+        text = tr(uid,
+            f"👤 Профиль\n\n💰 RUB: {user['balance']} ₽ (Ref: {ref_rub})\n💵 USD: {user['usd_balance']} $ (Ref: {ref_usd})\n🪙 GOLD: {user['gold_balance']} (Ref: {ref_gold})\n🛒 Покупок: {user['purchases_count']}",
+            f"👤 Profile\n\n💰 RUB: {user['balance']} ₽ (Ref: {ref_rub})\n💵 USD: {user['usd_balance']} $ (Ref: {ref_usd})\n🪙 GOLD: {user['gold_balance']} (Ref: {ref_gold})\n🛒 Purchases: {user['purchases_count']}")
         markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(types.InlineKeyboardButton("📦 Мои покупки", callback_data="my_purch"), types.InlineKeyboardButton("💳 Пополнить", callback_data="topup"))
-        markup.add(types.InlineKeyboardButton("🎟️ Промокод", callback_data="promo"))
+        markup.add(types.InlineKeyboardButton(tr(uid, "📦 Мои покупки", "📦 My purchases"), callback_data="my_purch"))
+        markup.add(types.InlineKeyboardButton(tr(uid, "💳 Пополнить", "💳 Top up"), callback_data="topup"))
+        markup.add(types.InlineKeyboardButton(tr(uid, "🎟️ Промокод", "🎟️ Promo"), callback_data="promo"))
         bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode="HTML")
-    elif txt == "💰 Рефералы":
+    
+    elif txt in ["💰 Рефералы / Referrals"]:
         count, ref_rub, ref_usd, ref_gold = get_ref_stats(uid)
         link = f"https://t.me/{BOT_USERNAME}?start={uid}"
-        bot.send_message(message.chat.id, f"🤝 Рефералы: {count}\n💰 RUB: {ref_rub} ₽\n💵 USD: {ref_usd} $\n🪙 GOLD: {ref_gold}\n\n🔗 <code>{link}</code>", parse_mode="HTML")
-    elif txt == "👨‍💻 Поддержка":
-        bot.send_message(message.chat.id, f"💬 Напишите: @{ADMIN_USERNAME}")
+        bot.send_message(message.chat.id, tr(uid,
+            f"🤝 Рефералы: {count}\n💰 RUB: {ref_rub} ₽\n💵 USD: {ref_usd} $\n🪙 GOLD: {ref_gold}\n\n🔗 <code>{link}</code>",
+            f"🤝 Referrals: {count}\n💰 RUB: {ref_rub} ₽\n💵 USD: {ref_usd} $\n🪙 GOLD: {ref_gold}\n\n🔗 <code>{link}</code>"), parse_mode="HTML")
+    
+    elif txt in ["👨‍💻 Поддержка / Support"]:
+        bot.send_message(message.chat.id, tr(uid, f"💬 Напишите: @{ADMIN_USERNAME}", f"💬 Contact: @{ADMIN_USERNAME}"))
+    
     elif txt == "⚙️ Админ панель" and uid == ADMIN_ID:
         bot.send_message(message.chat.id, "🛠 Админ-панель:", reply_markup=admin_menu())
 
@@ -406,27 +460,29 @@ def handle_text(message):
 def view_cat(call):
     cat_id = int(call.data.split('_')[1]); cat = get_category(cat_id)
     if not cat: return
+    uid = call.from_user.id
     markup = types.InlineKeyboardMarkup(row_width=1)
     for s_id, s_name, _ in get_subcategories(cat_id): markup.add(types.InlineKeyboardButton(f"📁 {s_name}", callback_data=f"sub_{s_id}"))
     for p_id, p_name, p_price, _, stock in get_products('category', cat_id):
         usd = round(p_price / get_usdt_rub_rate(), 2)
         markup.add(types.InlineKeyboardButton(f"📦 {p_name} — {p_price}₽ (${usd})", callback_data=f"buy_{p_id}"))
-    if call.from_user.id == ADMIN_ID:
+    if uid == ADMIN_ID:
         markup.add(types.InlineKeyboardButton("➕ Подкатегория", callback_data=f"add_sub_{cat_id}"))
         markup.add(types.InlineKeyboardButton("➕ Товар", callback_data=f"add_prod_cat_{cat_id}"))
-    markup.add(types.InlineKeyboardButton("‹ Назад", callback_data="back_menu"))
+    markup.add(types.InlineKeyboardButton("‹ Назад / Back", callback_data="back_menu"))
     send_with_photo(call.message.chat.id, f"📁 {cat[1]}", markup, cat[2])
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('sub_'))
 def view_sub(call):
     sub_id = int(call.data.split('_')[1]); sub = get_subcategory(sub_id)
     if not sub: return
+    uid = call.from_user.id
     markup = types.InlineKeyboardMarkup(row_width=1)
     for p_id, p_name, p_price, _, stock in get_products('subcategory', sub_id):
         usd = round(p_price / get_usdt_rub_rate(), 2)
         markup.add(types.InlineKeyboardButton(f"📦 {p_name} — {p_price}₽ (${usd})", callback_data=f"buy_{p_id}"))
-    if call.from_user.id == ADMIN_ID: markup.add(types.InlineKeyboardButton("➕ Товар", callback_data=f"add_prod_sub_{sub_id}"))
-    markup.add(types.InlineKeyboardButton("‹ Назад", callback_data=f"cat_{sub[3]}"))
+    if uid == ADMIN_ID: markup.add(types.InlineKeyboardButton("➕ Товар", callback_data=f"add_prod_sub_{sub_id}"))
+    markup.add(types.InlineKeyboardButton("‹ Назад / Back", callback_data=f"cat_{sub[3]}"))
     send_with_photo(call.message.chat.id, f"📁 {sub[1]}", markup, sub[2])
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('buy_'))
@@ -434,15 +490,17 @@ def buy_product(call):
     prod_id = int(call.data.split('_')[1]); prod = get_product(prod_id)
     if not prod: return
     name, _, price, photo, _, _, ptype, pid, stock = prod
-    user = get_user(call.from_user.id); uid = call.from_user.id
-    _, ref_rub, _, ref_gold = get_ref_stats(uid)
+    uid = call.from_user.id
+    user = get_user(uid); _, ref_rub, _, ref_gold = get_ref_stats(uid)
     usd_price = round(price / get_usdt_rub_rate(), 2); gold_price = round(price / GOLDA_RATE)
-    text = f"📦 {name}\n\n💰 {price} ₽ | ${usd_price}\n📦 Остаток: {stock}\n💼 Баланс: {user['balance']+ref_rub} ₽ | {user['gold_balance']+ref_gold} голды"
+    text = tr(uid,
+        f"📦 {name}\n\n💰 {price} ₽ | ${usd_price}\n📦 Остаток: {stock}\n💼 Баланс: {user['balance']+ref_rub} ₽ | {user['gold_balance']+ref_gold} голды",
+        f"📦 {name}\n\n💰 {price} ₽ | ${usd_price}\n📦 Stock: {stock}\n💼 Balance: {user['balance']+ref_rub} ₽ | {user['gold_balance']+ref_gold} gold")
     markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(types.InlineKeyboardButton("💳 Картой", callback_data=f"pay_balance_{prod_id}"))
-    markup.add(types.InlineKeyboardButton(f"🪙 Голдой ({gold_price})", callback_data=f"pay_gold_{prod_id}"))
+    markup.add(types.InlineKeyboardButton("💳 Картой / Card", callback_data=f"pay_balance_{prod_id}"))
+    markup.add(types.InlineKeyboardButton(f"🪙 Голдой / Gold ({gold_price})", callback_data=f"pay_gold_{prod_id}"))
     markup.add(types.InlineKeyboardButton("💸 CRYPTO", callback_data=f"pay_crypto_{prod_id}"))
-    markup.add(types.InlineKeyboardButton("‹ Назад", callback_data=f"view_back_{ptype}_{pid}"))
+    markup.add(types.InlineKeyboardButton("‹ Назад / Back", callback_data=f"view_back_{ptype}_{pid}"))
     send_with_photo(call.message.chat.id, text, markup, photo)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('view_back_'))
@@ -457,14 +515,14 @@ def pay_balance(call):
     prod_id = int(call.data.split('_')[2]); prod = get_product(prod_id)
     if not prod: return
     name, _, price, _, content_type, content, _, _, stock = prod
-    user = get_user(call.from_user.id); uid = call.from_user.id
-    _, ref_rub, _, _ = get_ref_stats(uid); total = user['balance'] + ref_rub
+    uid = call.from_user.id; user = get_user(uid); _, ref_rub, _, _ = get_ref_stats(uid); total = user['balance'] + ref_rub
     if total < price:
         markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(types.InlineKeyboardButton("💳 Пополнить", callback_data="topup"))
-        markup.add(types.InlineKeyboardButton("‹ Назад", callback_data=f"buy_{prod_id}"))
-        bot.send_message(call.message.chat.id, f"❌ Недостаточно!\n💰 {price} ₽\n💼 {total} ₽", reply_markup=markup); bot.answer_callback_query(call.id); return
-    if stock <= 0: bot.answer_callback_query(call.id, "❌ Закончился!"); return
+        markup.add(types.InlineKeyboardButton(tr(uid, "💳 Пополнить", "💳 Top up"), callback_data="topup"))
+        markup.add(types.InlineKeyboardButton("‹ Назад / Back", callback_data=f"buy_{prod_id}"))
+        bot.send_message(call.message.chat.id, tr(uid, f"❌ Недостаточно!\n💰 {price} ₽\n💼 {total} ₽", f"❌ Not enough!\n💰 {price} ₽\n💼 {total} ₽"), reply_markup=markup)
+        bot.answer_callback_query(call.id); return
+    if stock <= 0: bot.answer_callback_query(call.id, tr(uid, "❌ Закончился!", "❌ Out of stock!")); return
     rem = price
     if user['balance'] >= rem: update_balance(uid, -rem)
     else: update_balance(uid, -user['balance']); rem -= user['balance']; conn = sqlite3.connect("bot_database.db"); conn.cursor().execute("UPDATE users SET ref_balance = ref_balance - ? WHERE user_id = ?", (rem, uid)); conn.commit(); conn.close()
@@ -478,14 +536,14 @@ def pay_gold(call):
     prod_id = int(call.data.split('_')[2]); prod = get_product(prod_id)
     if not prod: return
     name, _, price, _, content_type, content, _, _, stock = prod
-    user = get_user(call.from_user.id); uid = call.from_user.id
-    _, _, _, ref_gold = get_ref_stats(uid); needed = round(price / GOLDA_RATE); total = user['gold_balance'] + ref_gold
+    uid = call.from_user.id; user = get_user(uid); _, _, _, ref_gold = get_ref_stats(uid); needed = round(price / GOLDA_RATE); total = user['gold_balance'] + ref_gold
     if total < needed:
         markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(types.InlineKeyboardButton("🪙 Пополнить", callback_data="topup"))
-        markup.add(types.InlineKeyboardButton("‹ Назад", callback_data=f"buy_{prod_id}"))
-        bot.send_message(call.message.chat.id, f"❌ Недостаточно!\n🪙 {needed}\n💼 {total}", reply_markup=markup); bot.answer_callback_query(call.id); return
-    if stock <= 0: bot.answer_callback_query(call.id, "❌ Закончился!"); return
+        markup.add(types.InlineKeyboardButton(tr(uid, "🪙 Пополнить", "🪙 Top up"), callback_data="topup"))
+        markup.add(types.InlineKeyboardButton("‹ Назад / Back", callback_data=f"buy_{prod_id}"))
+        bot.send_message(call.message.chat.id, tr(uid, f"❌ Недостаточно!\n🪙 {needed}\n💼 {total}", f"❌ Not enough!\n🪙 {needed}\n💼 {total}"), reply_markup=markup)
+        bot.answer_callback_query(call.id); return
+    if stock <= 0: bot.answer_callback_query(call.id, "❌ Out of stock!"); return
     rem = needed
     if user['gold_balance'] >= rem: update_gold_balance(uid, -rem)
     else: update_gold_balance(uid, -user['gold_balance']); rem -= user['gold_balance']; conn = sqlite3.connect("bot_database.db"); conn.cursor().execute("UPDATE users SET ref_gold = ref_gold - ? WHERE user_id = ?", (rem, uid)); conn.commit(); conn.close()
@@ -503,10 +561,10 @@ def pay_crypto(call):
     if url:
         conn = sqlite3.connect("bot_database.db"); conn.cursor().execute("INSERT INTO balance_requests (user_id, amount, invoice_id, status, method) VALUES (?, ?, ?, 'pending', 'crypto_purchase')", (call.from_user.id, price, inv_id)); rid = conn.cursor().lastrowid; conn.commit(); conn.close()
         markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(types.InlineKeyboardButton("🔗 Оплатить", url=url), types.InlineKeyboardButton("🔄 Проверить", callback_data=f"check_p_{rid}_{prod_id}"))
-        markup.add(types.InlineKeyboardButton("❌ Отмена", callback_data=f"buy_{prod_id}"))
+        markup.add(types.InlineKeyboardButton("🔗 Оплатить / Pay", url=url), types.InlineKeyboardButton("🔄 Проверить / Check", callback_data=f"check_p_{rid}_{prod_id}"))
+        markup.add(types.InlineKeyboardButton("❌ Отмена / Cancel", callback_data=f"buy_{prod_id}"))
         bot.send_message(call.message.chat.id, f"💸 CRYPTO\n📦 {name}\n💰 {price} ₽\n💵 {round(price/get_usdt_rub_rate(),2)} USD", reply_markup=markup)
-    else: bot.answer_callback_query(call.id, "❌ Ошибка", show_alert=True)
+    else: bot.answer_callback_query(call.id, "❌ Ошибка / Error", show_alert=True)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('check_p_'))
 def check_p(call):
@@ -537,16 +595,17 @@ def send_content(chat_id, ct, content, caption):
 # ================= ПОПОЛНЕНИЕ =================
 @bot.callback_query_handler(func=lambda call: call.data == "topup")
 def topup_start(call):
+    uid = call.from_user.id
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(types.InlineKeyboardButton("💳 RUB", callback_data="t_cur_rub"), types.InlineKeyboardButton("💸 USD", callback_data="t_cur_usd"), types.InlineKeyboardButton("🪙 GOLD", callback_data="t_cur_gold"))
-    bot.edit_message_text("💱 Выберите валюту:", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+    bot.edit_message_text(tr(uid, "💱 Выберите валюту:", "💱 Choose currency:"), call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('t_cur_'))
 def topup_cur(call):
-    cur = call.data.split('_')[2]
-    if cur == 'rub': msg = bot.send_message(call.message.chat.id, "💳 Сумма в рублях:"); bot.register_next_step_handler(msg, topup_rub)
-    elif cur == 'usd': msg = bot.send_message(call.message.chat.id, "💸 Сумма в долларах:"); bot.register_next_step_handler(msg, topup_usd)
-    elif cur == 'gold': msg = bot.send_message(call.message.chat.id, "🪙 Сумма в голде:"); bot.register_next_step_handler(msg, topup_gold)
+    cur = call.data.split('_')[2]; uid = call.from_user.id
+    if cur == 'rub': msg = bot.send_message(call.message.chat.id, tr(uid, "💳 Сумма в рублях:", "💳 Amount in RUB:")); bot.register_next_step_handler(msg, topup_rub)
+    elif cur == 'usd': msg = bot.send_message(call.message.chat.id, tr(uid, "💸 Сумма в долларах:", "💸 Amount in USD:")); bot.register_next_step_handler(msg, topup_usd)
+    elif cur == 'gold': msg = bot.send_message(call.message.chat.id, tr(uid, "🪙 Сумма в голде:", "🪙 Amount in GOLD:")); bot.register_next_step_handler(msg, topup_gold)
 
 def topup_rub(message):
     try:
@@ -661,22 +720,24 @@ def adm_g_dec(call):
 @bot.callback_query_handler(func=lambda call: call.data == "my_purch")
 def my_purch(call):
     conn = sqlite3.connect("bot_database.db"); c = conn.cursor(); c.execute("SELECT product_name, price, date, content, content_type FROM user_purchases WHERE user_id=? ORDER BY id DESC LIMIT 20", (call.from_user.id,)); rows = c.fetchall(); conn.close()
-    if not rows: bot.edit_message_text("📦 Нет покупок", call.message.chat.id, call.message.message_id); return
-    text = "📦 <b>Покупки:</b>\n\n"
-    for name, price, date, content, ct in rows:
-        text += f"• {name} — {price} ₽\n  📅 {date}\n\n"
+    uid = call.from_user.id
+    if not rows: bot.edit_message_text(tr(uid, "📦 Нет покупок", "📦 No purchases"), call.message.chat.id, call.message.message_id); return
+    text = tr(uid, "📦 <b>Покупки:</b>\n\n", "📦 <b>Purchases:</b>\n\n")
+    for name, price, date, content, ct in rows: text += f"• {name} — {price} ₽\n  📅 {date}\n\n"
     bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="HTML")
 
 @bot.callback_query_handler(func=lambda call: call.data == "promo")
 def promo_enter(call):
-    msg = bot.send_message(call.message.chat.id, "🎟️ Введите промокод:"); bot.register_next_step_handler(msg, process_promo)
+    uid = call.from_user.id
+    msg = bot.send_message(call.message.chat.id, tr(uid, "🎟️ Введите промокод:", "🎟️ Enter promo code:"))
+    bot.register_next_step_handler(msg, process_promo)
 
 def process_promo(message):
-    code = message.text.strip().upper(); promo = get_promocode(code)
+    code = message.text.strip().upper(); promo = get_promocode(code); uid = message.from_user.id
     if promo:
-        user = get_user(message.from_user.id); bonus = user['purchases_count'] * promo[0] / 100; update_balance(message.from_user.id, bonus)
-        bot.send_message(message.chat.id, f"✅ +{bonus:.2f} ₽!")
-    else: bot.send_message(message.chat.id, "❌ Недействительный")
+        user = get_user(uid); bonus = user['purchases_count'] * promo[0] / 100; update_balance(uid, bonus)
+        bot.send_message(message.chat.id, tr(uid, f"✅ +{bonus:.2f} ₽!", f"✅ +{bonus:.2f} ₽!"))
+    else: bot.send_message(message.chat.id, tr(uid, "❌ Недействительный", "❌ Invalid"))
 
 @bot.callback_query_handler(func=lambda call: call.data == "back_menu")
 def back_menu(call):
@@ -762,9 +823,11 @@ def admin_actions(call):
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(types.InlineKeyboardButton("📝 Текст", callback_data="mail_t"), types.InlineKeyboardButton("🖼️ Текст+Фото", callback_data="mail_p"))
         bot.edit_message_text("📢 Рассылка", call.message.chat.id, call.message.message_id, reply_markup=markup)
-    elif d.startswith("mail_"):
-        if d == "mail_t": admin_mailing_draft[call.from_user.id] = {'type': 'text'}; msg = bot.send_message(call.message.chat.id, "📝 Текст:"); bot.register_next_step_handler(msg, lambda m: start_mailing(call.from_user.id, m.text))
-        elif d == "mail_p": admin_mailing_draft[call.from_user.id] = {'type': 'photo'}; msg = bot.send_message(call.message.chat.id, "🖼️ Фото:"); bot.register_next_step_handler(msg, lambda m: (setattr(admin_mailing_draft[call.from_user.id], 'photo', m.photo[-1].file_id) if m.photo else None, bot.send_message(call.message.chat.id, "📝 Текст:"), bot.register_next_step_handler(msg, lambda m2: start_mailing(call.from_user.id, m2.text, admin_mailing_draft[call.from_user.id].get('photo')))))
+    elif d == "mail_t": admin_mailing_draft[call.from_user.id] = {'type': 'text'}; msg = bot.send_message(call.message.chat.id, "📝 Текст:"); bot.register_next_step_handler(msg, lambda m: start_mailing(call.from_user.id, m.text))
+    elif d == "mail_p":
+        admin_mailing_draft[call.from_user.id] = {'type': 'photo'}
+        msg = bot.send_message(call.message.chat.id, "🖼️ Отправьте фото:")
+        bot.register_next_step_handler(msg, lambda m: (setattr(admin_mailing_draft[call.from_user.id], 'photo', m.photo[-1].file_id) if m.photo else None, bot.send_message(call.message.chat.id, "📝 Теперь текст:"), bot.register_next_step_handler(msg, lambda m2: start_mailing(call.from_user.id, m2.text, admin_mailing_draft[call.from_user.id].get('photo')))))
     elif d == "adm_edit":
         products_list = []
         for cat_id, cat_name, _ in get_categories():
@@ -865,15 +928,15 @@ def start_mailing(admin_id, text, photo=None):
 if __name__ == "__main__":
     print("🤖 Запуск бота...")
     
-    # Запускаем автопинг
+    # Автопинг
     threading.Thread(target=auto_ping, daemon=True).start()
     
-    # Запускаем Flask
+    # Flask
     port = int(os.environ.get('PORT', 10000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port), daemon=True).start()
     print(f"🌐 Web Service на порту {port}")
     
-    # Запускаем бота
+    # Бот
     print("🤖 Бот запущен!")
     while True:
         try:
